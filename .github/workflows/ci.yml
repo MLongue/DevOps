@@ -30,7 +30,7 @@ jobs:
         run: flake8 app tests --max-line-length=100
 
       - name: Rodar testes automatizados (Pytest)
-        run: pytest -v
+        run: PYTHONPATH=. pytest -v
 
       - name: Testar build da imagem Docker
         run: docker build -t taskflow-api:ci-test .
