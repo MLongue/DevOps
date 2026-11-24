@@ -50,7 +50,7 @@ jobs:
 
       - name: Checar formatação dos arquivos .tf
         working-directory: ./infra
-        run: terraform fmt -check
+        run: terraform fmt -check -recursive
 
       - name: Validar sintaxe e configuração
         working-directory: ./infra
