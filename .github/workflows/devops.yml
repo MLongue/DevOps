@@ -1,0 +1,113 @@
+name: Pipeline DevOps
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/devops-app
+
+jobs:
+  validate-and-test:
+    name: Testes Automatizados e Validação de IaC
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar dependências e rodar testes
+        run: |
+          npm ci
+          npm test
+
+      - name: Validar sintaxe YAML do template de infraestrutura
+        run: |
+          python3 - << 'EOF'
+          import yaml
+
+          class CfnSafeLoader(yaml.SafeLoader):
+              pass
+
+          def cfn_tag_constructor(loader, tag_suffix, node):
+              if isinstance(node, yaml.ScalarNode):
+                  return loader.construct_scalar(node)
+              if isinstance(node, yaml.SequenceNode):
+                  return loader.construct_sequence(node)
+              return loader.construct_mapping(node)
+
+          CfnSafeLoader.add_multi_constructor('!', cfn_tag_constructor)
+
+          with open('infra/devops-infra.yaml', 'r', encoding='utf-8') as f:
+              data = yaml.load(f, Loader=CfnSafeLoader)
+              assert data is not None, "Template YAML vazio"
+
+          print('Template YAML válido!')
+          EOF
+
+  security-audit:
+    name: Auditoria de Dependências
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Auditoria de pacotes (npm audit)
+        run: npm audit --audit-level=high
+
+  build-scan-push:
+    name: Build, Scan Trivy e Push Docker Hub
+    needs: security-audit
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Build da imagem Docker
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} -t ${{ env.IMAGE_NAME }}:latest .
+
+      - name: Scan de vulnerabilidades na imagem (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL'
+
+      - name: Login no Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push da imagem para o Docker Hub
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.IMAGE_NAME }}:latest
+
+  deploy-production:
+    name: Entrega Contínua (CD)
+    needs: build-scan-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH no servidor de destino
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/devops
+            ./scripts/deploy.sh ${{ env.IMAGE_NAME }}:${{ github.sha }}

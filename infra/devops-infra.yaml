@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Pilha de infraestrutura na AWS para o projeto DevOps
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    Description: Tipo da instancia EC2
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Chave SSH existente na AWS
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  DevOpsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Permite SSH (22) e portas da aplicacao/monitoramento
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3001
+          CidrIp: 0.0.0.0/0
+
+  DevOpsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      ImageId: !Ref LatestAmiId
+      SecurityGroupIds:
+        - !Ref DevOpsSecurityGroup
+      Tags:
+        - Key: Name
+          Value: devops-host
+
+Outputs:
+  InstanceId:
+    Description: ID da instancia provisionada
+    Value: !Ref DevOpsInstance
+  PublicIP:
+    Description: IP publico da instancia
+    Value: !GetAtt DevOpsInstance.PublicIp
